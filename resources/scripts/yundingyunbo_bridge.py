@@ -1685,7 +1685,7 @@ class YundingyunboBridge:
         base_timeout = 180.0 if not force_cpu else 300.0
         duration_scale = duration * (4.0 if not force_cpu else 6.0)
         frame_scale = n_frames * (0.08 if not force_cpu else 0.16)
-        max_timeout = 1800.0 if not force_cpu else 3600.0
+        max_timeout = 7200.0 if not force_cpu else 14400.0
         return min(max_timeout, max(base_timeout, duration_scale, frame_scale))
 
     def _run_preprocess_worker(

@@ -25,7 +25,7 @@ const DEFAULT_BRIDGE_SCRIPT = 'yundingyunbo_bridge'
 const BRIDGE_START_TIMEOUT_MS = 300_000
 const INIT_AVATAR_TIMEOUT_MS = Math.max(
   BRIDGE_START_TIMEOUT_MS,
-  Number.parseInt(process.env.YDB_INIT_AVATAR_TIMEOUT_MS || '3900000', 10) || 3_900_000,
+  Number.parseInt(process.env.YDB_INIT_AVATAR_TIMEOUT_MS || '18000000', 10) || 18_000_000,
 )
 const PING_TIMEOUT_MS = 10_000
 const PROCESS_AUDIO_TIMEOUT_MS = 300_000 // 5 min max per audio
