@@ -1,0 +1,38 @@
+node_modules/
+out/
+release/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+.env
+*.local
+
+# 运行时数据和大目录
+heygem_data/
+data/
+logs/
+tmp/
+backups/
+.codex_backups/
+vendor/
+.runtime/
+
+# Python 编译产物
+*.pyc
+__pycache__/
+*.pyd
+
+# FFmpeg 二进制（太大，不入库）
+resources/ffmpeg/
+
+# 临时测试脚本
+_*.ts
+_*.py
+_*.js
+
+# OS / IDE
+*.swp
+*.swo
+.idea/
+.vscode/
