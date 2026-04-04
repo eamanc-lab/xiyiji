@@ -159,12 +159,15 @@ export class PipelineService extends EventEmitter {
     return this.normalizeFrame(this.avatarClockFrame + advance, this.avatarClockCycleLen)
   }
 
-  private resetAvatarClock(): void {
+  private resetAvatarClock(reason: string = 'unknown'): void {
+    const prevFrame = this.avatarClockFrame
+    const prevNext = this.nextStartFrame
     this.nextStartFrame = -1
     this.avatarClockFrame = -1
     this.avatarClockUpdatedAtMs = 0
     this.avatarClockFps = 25
     this.avatarClockCycleLen = 0
+    console.log(`[Pipeline] resetAvatarClock: reason=${reason}, prevFrame=${prevFrame}, prevNextStart=${prevNext} → reset to -1`)
   }
 
   private createTaskCancelledError(): Error {
@@ -222,7 +225,7 @@ export class PipelineService extends EventEmitter {
     this.cumulativeOffset = 0
     this.avatarTotalDuration = 0
     this.avatarDurationCached = ''
-    this.resetAvatarClock() // New avatar = new sequence; must re-query player position
+    this.resetAvatarClock('setAvatarVideo') // New avatar = new sequence; must re-query player position
     this.emit('avatar-changed', videoPath)
   }
 
@@ -1154,12 +1157,12 @@ export class PipelineService extends EventEmitter {
         this.rejectCurrentTaskCancellation()
       }
     } else {
-      this.cancelAll()
+      this.cancelAll('cancel-no-taskId')
     }
   }
 
-  cancelAll(): void {
-    console.log(`[Pipeline] cancelAll: queue=${this.queue.length}, isProcessing=${this.isProcessing}, currentTask=${this.currentTask?.id || 'none'}`)
+  cancelAll(reason: string = 'unknown'): void {
+    console.log(`[Pipeline] cancelAll: reason=${reason}, queue=${this.queue.length}, isProcessing=${this.isProcessing}, currentTask=${this.currentTask?.id || 'none'}`)
     for (const task of this.queue) {
       task.status = 'failed'
       task.error = 'cancelled'
@@ -1192,7 +1195,7 @@ export class PipelineService extends EventEmitter {
     }
 
     this.cumulativeOffset = 0
-    this.resetAvatarClock()
+    this.resetAvatarClock(`cancelAll:${reason}`)
 
     // Flush any pending seek time immediately so the player exits streaming mode now.
     // Use pendingSeekTime if available, otherwise 0.001 as a non-zero sentinel.

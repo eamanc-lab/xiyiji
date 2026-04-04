@@ -152,6 +152,7 @@ function startNativePreviewInit(
   avatarPath: string,
   startingMessage: string
 ): void {
+  console.log(`[Player] Preview start: mode=${mode}, avatar=${avatarPath}, token=${token}`)
   sendNativePreviewStatus(target, {
     token,
     state: 'starting',
@@ -556,8 +557,9 @@ export function registerPlayerIpc(): void {
     const activeService = getActiveNativeYdbService()
     if (activeService) {
       clearNativePreviewToken()
+      const owner = activeService.getSessionOwner?.() || 'unknown'
+      console.log(`[Player] player:close received, sessionOwner=${owner}, forwarding shutdown('player-close')`)
       activeService.shutdown('player-close')
-      console.log('[Player] player:close forwarded to native yundingyunbo session')
       return { success: true, nativeRenderer: true }
     }
     const win = getPlayerWindow()

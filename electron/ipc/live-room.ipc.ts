@@ -133,7 +133,7 @@ export function registerLiveRoomIpc(): void {
         activeNativeService.setSessionOwner('live')
       }
 
-      pipelineService.cancelAll()
+      pipelineService.cancelAll('room-start')
 
       if (isNativeYdb) {
         // cancelAll() may force-reset a stale preview bridge; reclaim ownership
@@ -280,7 +280,7 @@ export function registerLiveRoomIpc(): void {
       livePipelineService.stop()
 
       // 3. Cancel all in-flight pipeline tasks (closes append stream, resets avatar clock)
-      pipelineService.cancelAll()
+      pipelineService.cancelAll('room-stop')
 
       // 4. Fully reset the player (stop audio, clear frame queues, exit streaming mode)
       sendPlayerStop()

@@ -948,6 +948,8 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       return
     }
 
+    console.log(`[YDB] shutdown: reason=${reason}, force=${!!opts?.force}, sessionOwner=${this.sessionOwner}, avatarInitialized=${this.avatarInitialized}, hasBridge=${!!this.serverProcess}`)
+
     const proc = this.serverProcess
     const rl = this.rl
     const force = !!opts?.force
