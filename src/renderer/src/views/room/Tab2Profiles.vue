@@ -32,7 +32,7 @@
             v-if="selected && !editing"
             class="btn-small"
             :class="{ active: previewing || previewBusy }"
-            @click="(previewing || previewBusy) ? stopPreview() : openPreview()"
+            @click="(previewing || previewBusy) ? stopPreview({ reason: 'preview-button-click' }) : openPreview()"
           >
             {{ previewing ? '停止' : (previewBusy ? '取消预热' : '预览') }}
           </button>
@@ -508,7 +508,7 @@ function finishPreviewPlayback(context: PendingPreviewContext, message: string):
   console.log(
     `[Preview] completed one-shot playback: submitted=${Math.min(previewSegmentCursor, context.segments.length)}/${context.segments.length}`
   )
-  stopPreview({ clearStatus: false })
+  stopPreview({ clearStatus: false, reason: 'preview-playback-complete' })
 }
 
 function clearPendingPreview(clearStatus: boolean = true): void {
@@ -516,6 +516,17 @@ function clearPendingPreview(clearStatus: boolean = true): void {
   if (clearStatus) {
     previewStatusText.value = ''
   }
+}
+
+function createPreviewStopCorrelationId(): string {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      return `preview-stop:${globalThis.crypto.randomUUID()}`
+    }
+  } catch {
+    // ignore crypto availability issues
+  }
+  return `preview-stop:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 function attachPreviewPlaybackHooks(context: PendingPreviewContext): void {
@@ -530,7 +541,7 @@ function attachPreviewPlaybackHooks(context: PendingPreviewContext): void {
       reportPreviewError(
         `preview stopped: ${previewConsecutiveFailures} consecutive failures, last: ${task?.error || 'unknown'}`
       )
-      stopPreview({ clearStatus: false })
+      stopPreview({ clearStatus: false, reason: 'preview-consecutive-failures' })
     }
   })
 
@@ -538,13 +549,13 @@ function attachPreviewPlaybackHooks(context: PendingPreviewContext): void {
     if (!previewing.value || context.generation !== previewGeneration) return
     if (previewConsecutiveFailures >= MAX_PREVIEW_CONSECUTIVE_FAILURES) return
     if (previewSegmentCursor >= context.segments.length && !previewSubmitting) {
-      finishPreviewPlayback(context, '预览已完成，窗口即将关闭')
-      return
+      previewSegmentCursor = 0
+      console.log(`[Preview] All segments played, looping from start`)
     }
     submitPreviewBatch(context).catch((err) => {
       previewStatusText.value = '预览播报提交失败，请重试'
       reportPreviewError('idle callback submit failed', err)
-      stopPreview({ clearStatus: false })
+      stopPreview({ clearStatus: false, reason: 'preview-idle-submit-failed' })
     })
   })
 }
@@ -582,34 +593,30 @@ async function startPreviewPlayback(context: PendingPreviewContext): Promise<voi
     if (!previewing.value || context.generation !== previewGeneration) return
     previewStatusText.value = '预览排队失败，请重试'
     reportPreviewError('background preview queue failed', err)
-    stopPreview({ clearStatus: false })
+    stopPreview({ clearStatus: false, reason: 'preview-background-queue-failed' })
   })
 }
 
 async function submitPreviewBatch(context: PendingPreviewContext): Promise<void> {
   if (!previewing.value || previewSubmitting) return
   if (shouldBlockPreviewPlayback()) {
-    stopPreview()
+    stopPreview({ reason: 'preview-blocked-before-submit' })
     return
   }
 
   previewSubmitting = true
   try {
-    if (previewSegmentCursor >= context.segments.length) {
-      return
-    }
-
-    const idx = previewSegmentCursor
+    const idx = previewSegmentCursor % context.segments.length
     previewSegmentCursor += 1
     const text = context.segments[idx]
-    previewStatusText.value = `预览播放中：第 ${idx + 1}/${context.segments.length} 段`
+    previewStatusText.value = `预览播放中：第 ${idx + 1}/${context.segments.length} 段（第 ${Math.floor((previewSegmentCursor - 1) / context.segments.length) + 1} 轮）`
     console.log(
       `[Preview] submit segment ${idx + 1}/${context.segments.length}: profile=${context.profileName}, mode=${context.mediaType}, text="${text.slice(0, 24)}"`
     )
     const result = await window.api.pipelineSubmitTts(text, context.voice, context.speed)
     if (result && !result.success) {
       reportPreviewError(`TTS submit failed: ${result.error || 'unknown error'}`)
-      stopPreview()
+      stopPreview({ reason: 'preview-tts-submit-failed' })
     }
   } finally {
     previewSubmitting = false
@@ -627,7 +634,10 @@ async function openPreview(): Promise<void> {
     smoothing: p.chroma_smoothing ?? 1
   }
 
-  await window.api.pipelineCancel()
+  await window.api.pipelineCancel({
+    reason: 'preview-open-reset',
+    correlationId: createPreviewStopCorrelationId()
+  })
   cleanupPreviewIdleHook()
   previewErrorShown = false
   previewSegmentCursor = 0
@@ -647,7 +657,7 @@ async function openPreview(): Promise<void> {
       if (!p.camera_device_id) {
         previewStatusText.value = '未配置摄像头设备'
         reportPreviewError('camera device is not configured')
-        stopPreview({ clearStatus: false })
+        stopPreview({ clearStatus: false, reason: 'preview-camera-device-missing' })
         return
       }
 
@@ -655,7 +665,7 @@ async function openPreview(): Promise<void> {
       if (!camResult?.success) {
         previewStatusText.value = `摄像头预览启动失败：${camResult?.error || 'unknown error'}`
         reportPreviewError(`open camera failed: ${camResult?.error || 'unknown error'}`)
-        stopPreview({ clearStatus: false })
+        stopPreview({ clearStatus: false, reason: 'preview-open-camera-failed' })
         return
       }
 
@@ -690,7 +700,7 @@ async function openPreview(): Promise<void> {
       if (!p.video_file_path) {
         previewStatusText.value = '未配置形象视频'
         reportPreviewError('video file is not configured')
-        stopPreview({ clearStatus: false })
+        stopPreview({ clearStatus: false, reason: 'preview-video-file-missing' })
         return
       }
 
@@ -733,7 +743,7 @@ async function openPreview(): Promise<void> {
   } catch (err: any) {
     previewStatusText.value = `预览启动失败：${err?.message || err}`
     reportPreviewError(`open preview failed: ${err?.message || err}`, err)
-    stopPreview({ clearStatus: false })
+    stopPreview({ clearStatus: false, reason: 'preview-open-failed' })
   }
 }
 
@@ -751,7 +761,7 @@ async function handlePlayerPreviewStatus(status: PlayerPreviewStatus): Promise<v
     clearPendingPreview(false)
     previewStatusText.value = `预览启动失败：${status.message || 'unknown error'}`
     reportPreviewError(`native preview init failed: ${status.message || 'unknown error'}`)
-    stopPreview({ clearStatus: false, closePlayer: false })
+    stopPreview({ clearStatus: false, closePlayer: false, reason: 'preview-native-init-error' })
     return
   }
 
@@ -765,7 +775,7 @@ async function handlePlayerPreviewStatus(status: PlayerPreviewStatus): Promise<v
   } catch (err: any) {
     previewStatusText.value = `预览启动失败：${err?.message || err}`
     reportPreviewError(`finalize preview failed: ${err?.message || err}`, err)
-    stopPreview({ clearStatus: false })
+    stopPreview({ clearStatus: false, reason: 'preview-finalize-failed' })
   }
 }
 
@@ -785,8 +795,20 @@ async function syncCameraProfileLabels(): Promise<void> {
   await Promise.all(updates)
 }
 
-function stopPreview(options: { clearStatus?: boolean; closePlayer?: boolean } = {}): void {
+function stopPreview(options: {
+  clearStatus?: boolean
+  closePlayer?: boolean
+  reason?: string
+  correlationId?: string
+} = {}): void {
   const { clearStatus = true, closePlayer = true } = options
+  const reason = (options.reason || 'preview-stop-unspecified').trim() || 'preview-stop-unspecified'
+  const correlationId = (options.correlationId || createPreviewStopCorrelationId()).trim()
+  console.log(
+    `[Preview] stop requested: reason=${reason}, correlationId=${correlationId}, ` +
+      `closePlayer=${closePlayer}, clearStatus=${clearStatus}, ` +
+      `previewing=${previewing.value}, previewBusy=${previewBusy.value}, previewSubmitting=${previewSubmitting}`
+  )
   previewing.value = false
   previewBusy.value = false
   previewSubmitting = false
@@ -794,12 +816,12 @@ function stopPreview(options: { clearStatus?: boolean; closePlayer?: boolean } =
   cleanupPreviewIdleHook()
   clearPendingPreview(clearStatus)
   if (closePlayer) {
-    window.api.playerClose().catch((err) => {
-      console.warn('[Preview] playerClose failed', err)
+    window.api.playerClose({ reason, correlationId }).catch((err) => {
+      console.warn(`[Preview] playerClose failed: reason=${reason}, correlationId=${correlationId}`, err)
     })
   }
-  window.api.pipelineCancel().catch((err) => {
-    console.warn('[Preview] pipelineCancel failed', err)
+  window.api.pipelineCancel({ reason, correlationId }).catch((err) => {
+    console.warn(`[Preview] pipelineCancel failed: reason=${reason}, correlationId=${correlationId}`, err)
   })
 }
 
@@ -809,7 +831,7 @@ onMounted(async () => {
     handlePlayerPreviewStatus(status).catch((err) => {
       previewStatusText.value = `预览状态处理失败：${err?.message || err}`
       reportPreviewError('player preview status handling failed', err)
-      stopPreview({ clearStatus: false })
+      stopPreview({ clearStatus: false, reason: 'preview-status-handler-failed' })
     })
   })
   await load()
@@ -822,13 +844,13 @@ watch(
   ([roomStarting, status]) => {
     if ((roomStarting || status !== 'idle') && (previewing.value || previewBusy.value)) {
       console.log('[Preview] stopping because live room startup/session is active')
-      stopPreview()
+      stopPreview({ reason: 'preview-stopped-by-live-session' })
     }
   }
 )
 
 onUnmounted(() => {
-  if (previewing.value || previewBusy.value) stopPreview()
+  if (previewing.value || previewBusy.value) stopPreview({ reason: 'preview-component-unmounted' })
   cleanupPreviewStatusHook()
 })
 </script>
