@@ -5,22 +5,22 @@ import {
 } from './yundingyunbo-avatar'
 
 describe('resolveYdbAvatarReferenceClipDurationSec', () => {
-  it('caps long reference videos at three minutes for normal fps', () => {
+  it('clamps long reference videos to the 5-minute policy cap for normal fps', () => {
     expect(
       resolveYdbAvatarReferenceClipDurationSec({
         duration: 10 * 60 * 60,
         fps: 25,
       })
-    ).toBe(180)
+    ).toBe(300)
   })
 
-  it('allows high-fps reference videos to extend up to the three-minute cap', () => {
+  it('clamps high-fps reference videos to the 5-minute policy cap', () => {
     expect(
       resolveYdbAvatarReferenceClipDurationSec({
         duration: 10 * 60 * 60,
         fps: 60,
       })
-    ).toBe(180)
+    ).toBe(300)
   })
 
   it('keeps shorter videos unchanged when they are already under the max clip length', () => {

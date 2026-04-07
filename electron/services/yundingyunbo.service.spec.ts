@@ -41,6 +41,51 @@ describe('resolveYdbAvatarInitPaths', () => {
     })
   })
 
+  it('forces driving to match reference clip when video-stream backend requires it', () => {
+    expect(
+      resolveYdbAvatarInitPaths({
+        inputPath: 'D:\\videos\\full.mp4',
+        preparedVideoPath: 'D:\\data\\ydb_refs\\full_clip.mp4',
+        cameraMode: false,
+        forceDrivingMatchesReference: true,
+      })
+    ).toEqual({
+      referenceVideoPath: 'D:\\data\\ydb_refs\\full_clip.mp4',
+      drivingVideoPath: 'D:\\data\\ydb_refs\\full_clip.mp4',
+    })
+  })
+
+  it('does not change short-video behavior when forceDrivingMatchesReference is true', () => {
+    expect(
+      resolveYdbAvatarInitPaths({
+        inputPath: 'D:\\videos\\short.mp4',
+        preparedVideoPath: 'D:\\videos\\short.mp4',
+        cameraMode: false,
+        forceDrivingMatchesReference: true,
+      })
+    ).toEqual({
+      referenceVideoPath: 'D:\\videos\\short.mp4',
+      drivingVideoPath: 'D:\\videos\\short.mp4',
+    })
+  })
+
+  it('does not affect non-video-stream backend when flag is false (default)', () => {
+    // Default backend (yundingyunbo) keeps the original split: reference is
+    // the clip, driving stays as the full source video. The main bridge does
+    // not have the 5s tolerance issue, so this preserves existing behavior.
+    expect(
+      resolveYdbAvatarInitPaths({
+        inputPath: 'D:\\videos\\full.mp4',
+        preparedVideoPath: 'D:\\data\\ydb_refs\\full_clip.mp4',
+        cameraMode: false,
+        forceDrivingMatchesReference: false,
+      })
+    ).toEqual({
+      referenceVideoPath: 'D:\\data\\ydb_refs\\full_clip.mp4',
+      drivingVideoPath: 'D:\\videos\\full.mp4',
+    })
+  })
+
   it('does not self-supersede when file-mode reference preparation is synchronous', async () => {
     const service = new YundingyunboService() as any
 

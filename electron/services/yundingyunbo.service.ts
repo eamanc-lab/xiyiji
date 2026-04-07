@@ -35,6 +35,17 @@ export function resolveYdbAvatarInitPaths(options: {
   inputPath: string
   preparedVideoPath: string
   cameraMode: boolean
+  /**
+   * When true, if reference is a shortened clip (different from source),
+   * driving will also use the same shortened clip. This is required for the
+   * yundingyunbo_video_stream backend, whose `_resolve_file_mode_runtime_driving`
+   * compares reference vs driving duration with a 5s tolerance — exceeding
+   * this tolerance triggers the "raw full video direct playback" branch and
+   * causes the sequential frame generator to clamp at the wrong time.
+   * The default yundingyunbo backend has no such judgement, so it remains
+   * unaffected when this flag is false.
+   */
+  forceDrivingMatchesReference?: boolean
 }): {
   referenceVideoPath: string
   drivingVideoPath: string
@@ -42,12 +53,23 @@ export function resolveYdbAvatarInitPaths(options: {
   const inputPath = (options.inputPath || '').trim()
   const preparedVideoPath = (options.preparedVideoPath || '').trim() || inputPath
   const cameraMode = options.cameraMode === true
+  const forceDrivingMatchesReference = options.forceDrivingMatchesReference === true
 
   if (!cameraMode) {
     const sourceVideoPath = inputPath || preparedVideoPath
+    const referenceVideoPath = preparedVideoPath || sourceVideoPath
+    // Reference clip is "shortened" only when prepared output differs from
+    // the original source. Short videos (no clipping needed) keep original
+    // behavior: driving = source.
+    const isShortened =
+      referenceVideoPath.length > 0 &&
+      referenceVideoPath !== sourceVideoPath
     return {
-      referenceVideoPath: preparedVideoPath || sourceVideoPath,
-      drivingVideoPath: sourceVideoPath,
+      referenceVideoPath,
+      drivingVideoPath:
+        isShortened && forceDrivingMatchesReference
+          ? referenceVideoPath
+          : sourceVideoPath,
     }
   }
 
@@ -230,6 +252,7 @@ interface PendingRequest {
   onChunk?: (chunk: ChunkInfo) => void
   onFrameBatch?: (batch: FrameBatchInfo) => void
   onAck?: (numFrames: number, totalChunks: number) => Promise<number>
+  startFrameCommitted?: boolean
   onStatus?: (status: {
     stage: string
     detail?: string
@@ -238,6 +261,15 @@ interface PendingRequest {
   }) => void
   timeout?: NodeJS.Timeout
   kind?: 'ping' | 'init_avatar' | 'process_audio'
+}
+
+interface ShutdownTrace {
+  reason: string
+  detailReason: string
+  correlationId: string
+  force: boolean
+  at: number
+  bridgeGeneration: number
 }
 
 export type NativeSessionOwner = 'none' | 'preview' | 'live'
@@ -264,6 +296,7 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
   private pendingRequests = new Map<string, PendingRequest>()
   private serverStarting: Promise<void> | null = null
   private bridgeGeneration = 0
+  private lastShutdownTrace: ShutdownTrace | null = null
 
   private runtimeResolved = false
   private yundingyunboBase = ''
@@ -348,6 +381,7 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
   private async _doStartServer(): Promise<void> {
     this.resolveRuntimePaths()
     this.bridgeResetInProgress = false
+    this.lastShutdownTrace = null
     const generation = ++this.bridgeGeneration
 
     const dataDir = getDataDir()
@@ -425,11 +459,15 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       }
       if (!isCurrentBridge()) {
         if (!expectedClose) {
-          console.warn(`[YDB-Bridge] Stale process exited with code ${code}`)
+          console.warn(
+            `[YDB-Bridge] Stale process exited with code ${code}${this.formatLastShutdownTrace()}`
+          )
         }
         return
       }
-      console.warn(`[YDB-Bridge] Process exited with code ${code}`)
+      console.warn(
+        `[YDB-Bridge] Process exited with code ${code}, expected=${expectedClose}${this.formatLastShutdownTrace()}`
+      )
       this.serverReady = false
       if (this.serverProcess === proc) this.serverProcess = null
       if (this.rl === rl) this.rl = null
@@ -504,6 +542,7 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
   }
 
   private handlePipeBroken(): void {
+    console.warn(`[YDB] Bridge pipe broken${this.formatLastShutdownTrace()}`)
     this.serverReady = false
     this.initAvatarInFlight = null
     this.activeInitAvatarRequestId = null
@@ -520,6 +559,16 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
     this.bridgeResetInProgress = true
     console.warn('[YDB] Native window failure detected, resetting bridge session')
     this.shutdown('native-window-failure')
+  }
+
+  private formatLastShutdownTrace(trace: ShutdownTrace | null = this.lastShutdownTrace): string {
+    if (!trace) return ''
+    const ageMs = Math.max(0, Date.now() - trace.at)
+    return (
+      `, lastShutdown={reason=${trace.reason}, detailReason=${trace.detailReason}, ` +
+      `correlationId=${trace.correlationId}, force=${trace.force}, ` +
+      `generation=${trace.bridgeGeneration}, ageMs=${ageMs}}`
+    )
   }
 
   private sendCommand(cmd: Record<string, any>): void {
@@ -552,7 +601,31 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
         break
       case 'ack':
         // For process_audio: ack means audio accepted, continue waiting for done
-        if (pending.onAck) {
+        if (pending.kind === 'process_audio' && String(msg.phase || '').trim().toLowerCase() === 'prepare') {
+          if (pending.startFrameCommitted) break
+          pending.startFrameCommitted = true
+          Promise.resolve()
+            .then(async () => {
+              const resolvedStartFrame = pending.onAck
+                ? await pending.onAck(msg.num_frames || 0, msg.total_chunks || 1)
+                : 0
+              const startFrame = Number.isFinite(Number(resolvedStartFrame))
+                ? Math.max(0, Math.floor(Number(resolvedStartFrame)))
+                : 0
+              if (!this.pendingRequests.has(reqId)) return
+              this.sendCommand({
+                cmd: 'process_audio',
+                id: reqId,
+                phase: 'commit',
+                start_frame: startFrame,
+              })
+            })
+            .catch((err: any) => {
+              const error = err instanceof Error ? err : new Error(String(err || 'unknown start_frame error'))
+              pending.reject(error)
+              this.clearPending(reqId)
+            })
+        } else if (pending.onAck) {
           pending.onAck(msg.num_frames || 0, msg.total_chunks || 1).catch(() => {})
         }
         break
@@ -711,7 +784,13 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
     return this.avatarInitialized
   }
 
-  resetStreamingSession(): void {
+  resetStreamingSession(
+    reason: string = 'stream-reset',
+    meta?: {
+      correlationId?: string
+      detailReason?: string
+    }
+  ): void {
     const hasBridgeActivity =
       !!this.serverProcess ||
       !!this.serverStarting ||
@@ -719,7 +798,11 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       this.pendingRequests.size > 0
 
     if (hasBridgeActivity) {
-      this.shutdown('stream-reset', { force: true })
+      this.shutdown('stream-reset', {
+        force: true,
+        detailReason: meta?.detailReason || reason,
+        correlationId: meta?.correlationId,
+      })
       return
     }
 
@@ -796,10 +879,18 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       const preparedVideoPath = requestedCameraMode
         ? inputPath
         : (await prepareYdbAvatarVideo(inputPath)) || inputPath
+      // The video-stream bridge has a 5s reference/driving duration tolerance
+      // in `_resolve_file_mode_runtime_driving`. Exceeding it switches to
+      // "raw full video direct playback" and breaks the sequential frame
+      // generator. When using this bridge, force driving = reference so the
+      // bridge stays in the "reusing normalized reference" path.
+      const isVideoStreamBridge =
+        this.bridgeScriptBaseName === 'yundingyunbo_video_stream_bridge'
       const { referenceVideoPath, drivingVideoPath } = resolveYdbAvatarInitPaths({
         inputPath,
         preparedVideoPath,
         cameraMode: requestedCameraMode,
+        forceDrivingMatchesReference: isVideoStreamBridge,
       })
       console.log(
         `[YDB] initAvatar reference/driving selected: reference=${referenceVideoPath}, driving=${drivingVideoPath}, cameraMode=${requestedCameraMode}`
@@ -934,13 +1025,20 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
         cmd: 'process_audio',
         id: reqId,
         audio: audioPath,
+        phase: 'prepare',
       })
     })
   }
 
-  shutdown(reason: string = 'manual', opts?: { force?: boolean }): void {
+  shutdown(
+    reason: string = 'manual',
+    opts?: { force?: boolean; correlationId?: string; detailReason?: string }
+  ): void {
+    const detailReason = opts?.detailReason || ''
+    const correlationId = opts?.correlationId || ''
+    const force = !!opts?.force
     if (
-      !opts?.force &&
+      !force &&
       reason === 'player-close' &&
       (this.sessionOwner === 'live' || this.liveTransitionPrepared)
     ) {
@@ -948,11 +1046,25 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       return
     }
 
-    console.log(`[YDB] shutdown: reason=${reason}, force=${!!opts?.force}, sessionOwner=${this.sessionOwner}, avatarInitialized=${this.avatarInitialized}, hasBridge=${!!this.serverProcess}`)
+    this.lastShutdownTrace = {
+      reason,
+      detailReason,
+      correlationId,
+      force,
+      at: Date.now(),
+      bridgeGeneration: this.bridgeGeneration,
+    }
+
+    console.log(
+      `[YDB] shutdown: reason=${reason}, detailReason=${detailReason}, ` +
+        `correlationId=${correlationId}, force=${force}, ` +
+        `sessionOwner=${this.sessionOwner}, avatarInitialized=${this.avatarInitialized}, ` +
+        `hasBridge=${!!this.serverProcess}, pendingRequests=${this.pendingRequests.size}, ` +
+        `bridgeGeneration=${this.bridgeGeneration}`
+    )
 
     const proc = this.serverProcess
     const rl = this.rl
-    const force = !!opts?.force
     this.bridgeGeneration += 1
 
     if (proc) {
@@ -961,7 +1073,15 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
 
     if (proc?.stdin?.writable) {
       try {
-        proc.stdin.write(JSON.stringify({ cmd: 'shutdown', id: uuidv4() }) + '\n')
+        proc.stdin.write(
+          JSON.stringify({
+            cmd: 'shutdown',
+            id: uuidv4(),
+            reason,
+            detail_reason: detailReason,
+            correlation_id: correlationId,
+          }) + '\n'
+        )
       } catch {
         // ignore broken pipe during shutdown
       }
