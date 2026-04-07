@@ -352,17 +352,19 @@ export async function chromakeyExport(
  * Cut a segment from a video file.
  * Re-encodes to ensure proper keyframes for HeyGem F2F processing.
  *
- * @param options.fps If specified, force the output video to use this fps
- *   (resamples frames). Useful when the consumer requires a specific fps —
- *   e.g. yundingyunbo's normalized_video uses 25 fps internally, so reference
- *   clips must also be 25 fps to keep frame counts aligned.
+ * @param options.fps If specified, force the output video to use this fps.
+ * @param options.quality 'fast' (default, ultrafast preset, suitable for
+ *   real-time pipeline segments) or 'high' (medium preset + lower CRF,
+ *   suitable for long-lived reference clips that feed character training).
+ *   The default keeps existing pipeline.service callers at fast/realtime,
+ *   while character preheat callers can opt into high quality.
  */
 export async function cutVideoSegment(
   videoPath: string,
   startSec: number,
   durationSec: number,
   outputPath: string,
-  options?: { fps?: number }
+  options?: { fps?: number; quality?: 'fast' | 'high' }
 ): Promise<void> {
   const { ffmpeg } = await detectFfmpeg()
   const timeoutMs = Math.max(
@@ -375,13 +377,17 @@ export async function cutVideoSegment(
     fpsArgs.push('-r', String(options.fps))
   }
 
+  const isHighQuality = options?.quality === 'high'
+  const preset = isHighQuality ? 'medium' : 'ultrafast'
+  const crf = isHighQuality ? '17' : '18'
+
   await execFileAsync(ffmpeg, [
     '-ss', String(startSec),
     '-i', videoPath,
     '-t', String(durationSec),
     '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-crf', '18',
+    '-preset', preset,
+    '-crf', crf,
     ...fpsArgs,
     '-c:a', 'copy',
     '-y',
