@@ -9,5 +9,10 @@ export const yundingyunboVideoStreamService = new YundingyunboService({
     YDB_ENABLE_BLOCKING_SPECIAL_DRIVE: '1',
     YDB_FORCE_SEQUENTIAL_FILE_FRAMES: '1',
     YDB_ENABLE_AUTO_SPECIAL_READER: '0',
+    // Allow video-stream to loop the full driving video. Default is '1'
+    // (no_loop), which clamps the sequential frame generator at last_frame
+    // and prevents the video from cycling back to start. We want full 27min
+    // playback that loops back to the beginning, so disable no_loop here.
+    YDB_VIDEO_STREAM_NO_LOOP: '0',
   },
 })

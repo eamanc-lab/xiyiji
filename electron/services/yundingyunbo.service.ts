@@ -879,18 +879,19 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       const preparedVideoPath = requestedCameraMode
         ? inputPath
         : (await prepareYdbAvatarVideo(inputPath)) || inputPath
-      // The video-stream bridge has a 5s reference/driving duration tolerance
-      // in `_resolve_file_mode_runtime_driving`. Exceeding it switches to
-      // "raw full video direct playback" and breaks the sequential frame
-      // generator. When using this bridge, force driving = reference so the
-      // bridge stays in the "reusing normalized reference" path.
-      const isVideoStreamBridge =
-        this.bridgeScriptBaseName === 'yundingyunbo_video_stream_bridge'
+      // Reference is the shortened clip (5min, for character training).
+      // Driving stays as the full source video (27min, for actual playback).
+      // The video-stream bridge will detect duration mismatch and switch to
+      // "raw full video direct playback" — that is intentional now: with
+      // YDB_VIDEO_STREAM_NO_LOOP=0 (set in yundingyunbo-video-stream.service),
+      // the sequential frame generator is allowed to wrap, so the full 27min
+      // video plays through and loops naturally back to the start.
+      // forceDrivingMatchesReference is kept as an opt-in escape hatch but
+      // not enabled by default.
       const { referenceVideoPath, drivingVideoPath } = resolveYdbAvatarInitPaths({
         inputPath,
         preparedVideoPath,
         cameraMode: requestedCameraMode,
-        forceDrivingMatchesReference: isVideoStreamBridge,
       })
       console.log(
         `[YDB] initAvatar reference/driving selected: reference=${referenceVideoPath}, driving=${drivingVideoPath}, cameraMode=${requestedCameraMode}`
