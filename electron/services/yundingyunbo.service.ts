@@ -449,6 +449,10 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
       if (text) {
         console.log(`[YDB-Bridge] ${text}`)
         this.handleBridgeRuntimeFailure(text)
+        // Parse progress lines (per-line because stderr may batch multiple)
+        for (const line of text.split(/\r?\n/)) {
+          if (line) this.parsePreprocessProgressFromStderr(line)
+        }
       }
     })
 
@@ -687,6 +691,7 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
     stage: string
     detail?: string
     elapsedSeconds?: number
+    progress?: { current: number; total: number }
     source: 'service' | 'bridge'
   }): void {
     try {
@@ -698,6 +703,33 @@ export class YundingyunboService extends EventEmitter implements LipSyncBackend 
     } catch (err: any) {
       console.warn(`[YDB] init-avatar-status listener failed: ${err?.message || err}`)
     }
+  }
+
+  // Parse "已处理 X/Y 帧" or "处理帧: X/Y" from preprocess worker stderr
+  // and forward as init-avatar progress.
+  private parsePreprocessProgressFromStderr(text: string): void {
+    if (!this.activeInitAvatarRequestId) return
+    // Match patterns like "已处理 24500/40653 帧" or "处理帧: 24500/40653"
+    const match = text.match(/(?:已处理|处理帧:?)\s*(\d+)\s*\/\s*(\d+)/)
+    if (!match) return
+    const current = parseInt(match[1], 10)
+    const total = parseInt(match[2], 10)
+    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return
+
+    // Determine current stage from recent log keywords for friendlier display
+    let stage = 'preprocess_progress'
+    if (/read_video_frames|视频处理|帧读取/.test(text)) {
+      stage = 'read_video_frames'
+    } else if (/process_face_frames|人脸处理|逐帧处理/.test(text)) {
+      stage = 'process_face_frames'
+    }
+
+    this.emitInitAvatarStatus({
+      stage,
+      detail: `${current}/${total}`,
+      progress: { current, total },
+      source: 'bridge',
+    })
   }
 
   private ensureInitAvatarStillCurrent(

@@ -8,12 +8,26 @@ import { cutVideoSegment, extractVideoInfo, type VideoInfo } from './ffmpeg'
 const AVATAR_REFERENCE_CLIP_POLICY_VERSION = 'v7-high-quality'
 const CAMERA_REFERENCE_MAX_DURATION_SEC = 12
 const AVATAR_REFERENCE_MAX_DURATION_SEC = (() => {
-  // Default: 5 minutes. Longer videos (e.g. 27min) would take 70+ minutes
-  // for character preprocessing (face detection + XSeg mask generation).
-  // 5 minutes is usually enough to capture face angles for the model.
-  const raw = Number(process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC || '300')
-  if (!Number.isFinite(raw)) return 300
-  return raw > 0 ? raw : 300
+  // Default: 36000 seconds (10 hours), effectively no clipping.
+  //
+  // Why we don't clip:
+  // We tried clipping reference to 5 minutes to save preprocessing time
+  // (74min -> ~8min for a 27min source video), but yundingyunbo's
+  // video-stream backend has a hard coupling between reference length and
+  // playback range:
+  // - normalized_video.mp4 is generated from reference, so a 5min reference
+  //   produces a 5min normalized_video
+  // - special_drive mode reads driving segments, but yundingyunbo's
+  //   FrameSynthesizer expects segments at reference fps and runs into
+  //   batch alignment + VideoFaceReader EOF issues at short references
+  // - the only stable configuration is reference == driving (full length)
+  //
+  // Trade-off: first-time preheat takes ~1 hour for a long video, but the
+  // result is cached so subsequent previews are instant. The UI must show
+  // a clear progress indicator so users know what to expect.
+  const raw = Number(process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC || '36000')
+  if (!Number.isFinite(raw)) return 36000
+  return raw > 0 ? raw : 36000
 })()
 const AVATAR_REFERENCE_MIN_DURATION_SEC = (() => {
   const raw = Number(process.env.YDB_AVATAR_REFERENCE_MIN_DURATION_SEC || '30')

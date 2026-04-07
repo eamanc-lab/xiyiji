@@ -58,6 +58,9 @@ interface NativePreviewStatusPayload {
   mode: NativePreviewMode
   avatarPath?: string
   message?: string
+  videoFps?: number
+  videoFrames?: number
+  videoDurationSec?: number
 }
 
 function isExpectedNativePreviewCancel(message: string): boolean {
@@ -87,7 +90,11 @@ function formatNativePreviewStageLabel(stage: string): string {
     resolve_data: '正在解析视频数据',
     cache_hit: '检测到可复用角色缓存，正在快速启动',
     preprocess_start: '正在分析视频并建立角色数据',
+    preprocess_progress: '正在处理视频帧',
+    read_video_frames: '正在读取视频帧',
+    process_face_frames: '正在抽帧并处理关键帧',
     clone_video_local_v2: '正在分析人脸并建立角色数据',
+    'bin.image_clone.infer_api.read_video_frames': '正在读取视频帧',
     'bin.image_clone.infer_api.process_face_frames': '正在抽帧并处理关键帧',
     creating_manager: '角色数据已完成，正在启动预览窗口',
   }
@@ -95,15 +102,41 @@ function formatNativePreviewStageLabel(stage: string): string {
   return labels[normalized] || `正在预热预览：${normalized}`
 }
 
+function formatProgressSuffix(
+  progress: { current: number; total: number } | undefined,
+  globalElapsedSec: number
+): string {
+  if (!progress || progress.total <= 0 || progress.current <= 0) return ''
+  const ratio = Math.min(1, progress.current / progress.total)
+  const percent = Math.floor(ratio * 100)
+  let etaStr = ''
+  if (globalElapsedSec > 5 && ratio > 0.01 && ratio < 1) {
+    const totalEstimate = globalElapsedSec / ratio
+    const remaining = Math.max(0, Math.round(totalEstimate - globalElapsedSec))
+    if (remaining < 60) {
+      etaStr = `，预计剩余 ${remaining} 秒`
+    } else if (remaining < 3600) {
+      etaStr = `，预计剩余 ${Math.round(remaining / 60)} 分钟`
+    } else {
+      const hours = Math.floor(remaining / 3600)
+      const mins = Math.round((remaining % 3600) / 60)
+      etaStr = `，预计剩余 ${hours} 小时 ${mins} 分钟`
+    }
+  }
+  return ` ${progress.current}/${progress.total} (${percent}%)${etaStr}`
+}
+
 function formatNativePreviewProgressMessage(
   mode: NativePreviewMode,
   status: {
     stage?: string
     elapsedSeconds?: number
+    progress?: { current: number; total: number }
   }
 ): string {
   const stage = String(status.stage || '').trim()
   const elapsedSuffix = formatElapsedSuffix(status.elapsedSeconds)
+  const progressSuffix = formatProgressSuffix(status.progress, Number(status.elapsedSeconds || 0))
 
   if (stage === 'prepare_reference') {
     return mode === 'camera'
@@ -117,7 +150,7 @@ function formatNativePreviewProgressMessage(
       : `参考片段已就绪，正在启动引擎${elapsedSuffix}`
   }
 
-  return `${formatNativePreviewStageLabel(stage)}${elapsedSuffix}`
+  return `${formatNativePreviewStageLabel(stage)}${progressSuffix}${elapsedSuffix}`
 }
 
 function createNativePreviewToken(): string {
@@ -167,6 +200,7 @@ function startNativePreviewInit(
     const forwardInitStatus = (status: {
       stage?: string
       elapsedSeconds?: number
+      progress?: { current: number; total: number }
     }) => {
       if (!isNativePreviewTokenActive(token)) return
       const globalElapsed = Math.floor((Date.now() - globalStartMs) / 1000)
@@ -553,17 +587,34 @@ export function registerPlayerIpc(): void {
   })
 
   // Close player window
-  ipcMain.handle('player:close', () => {
+  ipcMain.handle('player:close', (_event, details?: { reason?: string; correlationId?: string }) => {
+    const detailReason =
+      typeof details?.reason === 'string' && details.reason.trim().length > 0
+        ? details.reason.trim()
+        : 'unspecified'
+    const correlationId =
+      typeof details?.correlationId === 'string' && details.correlationId.trim().length > 0
+        ? details.correlationId.trim()
+        : ''
     const activeService = getActiveNativeYdbService()
     if (activeService) {
       clearNativePreviewToken()
       const owner = activeService.getSessionOwner?.() || 'unknown'
-      console.log(`[Player] player:close received, sessionOwner=${owner}, forwarding shutdown('player-close')`)
-      activeService.shutdown('player-close')
+      console.log(
+        `[Player] player:close received, sessionOwner=${owner}, ` +
+          `reason=${detailReason}, correlationId=${correlationId}, forwarding shutdown('player-close')`
+      )
+      activeService.shutdown('player-close', {
+        detailReason,
+        correlationId,
+      })
       return { success: true, nativeRenderer: true }
     }
     const win = getPlayerWindow()
     if (win) {
+      console.log(
+        `[Player] player:close received for BrowserWindow, reason=${detailReason}, correlationId=${correlationId}`
+      )
       win.close()
     }
     return { success: true }
