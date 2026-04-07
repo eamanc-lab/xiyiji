@@ -158,56 +158,38 @@ class VideoStreamBridge(_CompiledVideoStreamBridge):
         reference_frame_source_path: str = '',
         reference_frame_source_info: dict | None = None,
     ) -> tuple[str, dict, dict]:
-        resolved_path, resolved_info, meta = super()._resolve_file_mode_runtime_driving(
+        # Always passthrough to parent — never force direct_playback.
+        #
+        # Previously this method forced `direct_playback=True` when reference
+        # was much shorter than driving (e.g. 5min reference + 27min driving).
+        # That set `_video_stream_direct_drive_enabled=True` which disabled
+        # special_drive mode, causing playback to be limited by the
+        # normalized_video range (driven by reference length). The visible
+        # symptom: video looped every 5 minutes instead of playing the full
+        # 27 minutes.
+        #
+        # By passthrough, special_drive mode stays enabled and behaves like
+        # camera mode: each audio task triggers an on-demand segment capture
+        # from the full driving video via _prepare_file_mode_driving_segment +
+        # manager.drive_with_special_video. This processes the driving video
+        # frame-by-frame at request time, independent of reference length.
+        # Result: reference can stay short (fast preheat) while driving plays
+        # in full and loops naturally back to the start.
+        return super()._resolve_file_mode_runtime_driving(
             backend,
             driving_video_path,
             driving_video_info,
             reference_frame_source_path,
             reference_frame_source_info,
         )
-        if backend != 'video_stream':
-            return resolved_path, resolved_info, meta
 
-        source_path = str(driving_video_path or '').strip()
-        reference_path = str(reference_frame_source_path or '').strip()
-        source_info = dict(driving_video_info or {})
-        reference_info = dict(reference_frame_source_info or {})
-        if not source_path or not os.path.isfile(source_path):
-            return resolved_path, resolved_info, meta
-
-        reference_duration = max(0.0, float(reference_info.get('duration') or 0.0))
-        source_duration = max(0.0, float(source_info.get('duration') or 0.0))
-        reference_frames = max(0, int(reference_info.get('n_frames') or 0))
-        source_frames = max(0, int(source_info.get('n_frames') or 0))
-
-        if reference_path and os.path.isfile(reference_path):
-            if (
-                source_duration > 0.0
-                and reference_duration > 0.0
-                and source_duration > reference_duration + 5.0
-            ) or (
-                source_frames > 0
-                and reference_frames > 0
-                and source_frames > reference_frames + max(180, int(reference_frames * 0.1))
-            ):
-                base.log(
-                    'Video-stream runtime driving source using raw full video for direct playback: '
-                    f'source={source_path}, reference={reference_path}, '
-                    f'sourceDuration={source_duration:.3f}s, referenceDuration={reference_duration:.3f}s, '
-                    f'sourceFrames={source_frames}, referenceFrames={reference_frames}'
-                )
-                return (
-                    source_path,
-                    source_info,
-                    {
-                        'reason': 'long driving video keeps full source playback while reference stays clipped',
-                        'direct_playback': True,
-                    },
-                )
-
-        return resolved_path, resolved_info, meta
-
-    def _reserve_file_mode_drive_request(self, req_id: str, audio_path: str, duration: float) -> dict:
+    def _reserve_file_mode_drive_request(
+        self,
+        req_id: str,
+        audio_path: str,
+        duration: float,
+        requested_start_frame: int | None = None,
+    ) -> dict:
         with self._file_drive_state_lock:
             source_video = self._file_drive_video_path
             source_info = dict(self._file_drive_video_info or {})
@@ -232,11 +214,20 @@ class VideoStreamBridge(_CompiledVideoStreamBridge):
             end_frame = None
             visible_end_frame = None
             no_loop = self._video_stream_no_loop_enabled()
+            requested_start = None
+            if requested_start_frame is not None:
+                try:
+                    requested_start = max(0, int(requested_start_frame))
+                except Exception:
+                    requested_start = 0
 
             if total_frames > 0:
                 last_frame = max(0, total_frames - 1)
                 if no_loop:
-                    start_frame = min(max(0, int(self._file_drive_cursor_frame or 0)), last_frame)
+                    start_frame = min(
+                        requested_start if requested_start is not None else max(0, int(self._file_drive_cursor_frame or 0)),
+                        last_frame,
+                    )
                     start_sec = start_frame / fps
                     visible_end_frame = min(last_frame, start_frame + num_frames - 1)
                     end_frame = visible_end_frame
@@ -256,20 +247,30 @@ class VideoStreamBridge(_CompiledVideoStreamBridge):
                             )
                             setattr(self, '_xiyiji_video_stream_eof_log_key', eof_log_key)
                 else:
-                    start_frame = int(self._file_drive_cursor_frame or 0) % total_frames
+                    start_frame = (
+                        requested_start % total_frames
+                        if requested_start is not None
+                        else int(self._file_drive_cursor_frame or 0) % total_frames
+                    )
                     start_sec = start_frame / fps
                     self._file_drive_cursor_frame = (start_frame + num_frames) % total_frames
                     self._file_drive_cursor_sec = self._file_drive_cursor_frame / fps
                     end_frame = (start_frame + num_frames - 1) % total_frames
             elif total_duration > 0.05:
                 if no_loop:
-                    start_sec = min(max(0.0, float(self._file_drive_cursor_sec or 0.0)), total_duration)
+                    if requested_start is not None:
+                        start_sec = min(total_duration, max(0.0, float(requested_start) / fps))
+                    else:
+                        start_sec = min(max(0.0, float(self._file_drive_cursor_sec or 0.0)), total_duration)
                     next_sec = min(total_duration, start_sec + requested_duration)
                     self._file_drive_cursor_sec = next_sec
                     start_frame = int(round(start_sec * fps))
                     self._file_drive_cursor_frame = int(round(next_sec * fps))
                 else:
-                    start_sec = self._file_drive_cursor_sec % total_duration
+                    if requested_start is not None:
+                        start_sec = min(total_duration, max(0.0, float(requested_start) / fps))
+                    else:
+                        start_sec = self._file_drive_cursor_sec % total_duration
                     self._file_drive_cursor_sec = (start_sec + requested_duration) % total_duration
                     start_frame = int(round(start_sec * fps))
             else:
