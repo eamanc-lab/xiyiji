@@ -5,7 +5,7 @@ import { getDataDir } from '../config'
 import { dbGet } from '../db/index'
 import { cutVideoSegment, extractVideoInfo, type VideoInfo } from './ffmpeg'
 
-const AVATAR_REFERENCE_CLIP_POLICY_VERSION = 'v5'
+const AVATAR_REFERENCE_CLIP_POLICY_VERSION = 'v6-25fps'
 const CAMERA_REFERENCE_MAX_DURATION_SEC = 12
 const AVATAR_REFERENCE_MAX_DURATION_SEC = (() => {
   // Default: 5 minutes. Longer videos (e.g. 27min) would take 70+ minutes
@@ -26,6 +26,13 @@ const AVATAR_REFERENCE_TARGET_FRAME_COUNT = (() => {
   return raw >= 0 ? raw : 0
 })()
 const CAMERA_REFERENCE_CLIP_OFFSET_SEC = 1
+
+// yundingyunbo's clone_video_local_v2 normalizes videos to 25 fps internally
+// (regardless of source fps). The reference clip we generate must use the same
+// fps so that frame counts stay aligned with normalized_video.mp4. Otherwise
+// `_resolve_file_mode_runtime_driving` in the video-stream backend triggers
+// "raw full video direct playback" because frame_diff > max(180, ref*0.1).
+const YDB_REFERENCE_CLIP_NORMALIZED_FPS = 25
 
 function isCameraRecordingPath(path: string): boolean {
   return path.replace(/\\/g, '/').includes('camera_recordings')
@@ -208,7 +215,9 @@ async function prepareYdbReferenceVideo(
   }
 
   try {
-    await cutVideoSegment(sourcePath, startSec, maxDurationSec, clipPath)
+    await cutVideoSegment(sourcePath, startSec, maxDurationSec, clipPath, {
+      fps: YDB_REFERENCE_CLIP_NORMALIZED_FPS,
+    })
     const clipInfo = await extractVideoInfo(clipPath)
     const clipDuration = Number.isFinite(clipInfo.duration) ? clipInfo.duration : 0
     if (clipDuration <= 0 || clipDuration > maxDurationSec + 1) {

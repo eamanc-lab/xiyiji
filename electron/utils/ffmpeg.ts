@@ -351,18 +351,29 @@ export async function chromakeyExport(
 /**
  * Cut a segment from a video file.
  * Re-encodes to ensure proper keyframes for HeyGem F2F processing.
+ *
+ * @param options.fps If specified, force the output video to use this fps
+ *   (resamples frames). Useful when the consumer requires a specific fps —
+ *   e.g. yundingyunbo's normalized_video uses 25 fps internally, so reference
+ *   clips must also be 25 fps to keep frame counts aligned.
  */
 export async function cutVideoSegment(
   videoPath: string,
   startSec: number,
   durationSec: number,
-  outputPath: string
+  outputPath: string,
+  options?: { fps?: number }
 ): Promise<void> {
   const { ffmpeg } = await detectFfmpeg()
   const timeoutMs = Math.max(
     180000,
     Math.min(900000, Math.round(Math.max(1, durationSec) * 2000 + 60000))
   )
+
+  const fpsArgs: string[] = []
+  if (options?.fps && Number.isFinite(options.fps) && options.fps > 0) {
+    fpsArgs.push('-r', String(options.fps))
+  }
 
   await execFileAsync(ffmpeg, [
     '-ss', String(startSec),
@@ -371,6 +382,7 @@ export async function cutVideoSegment(
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
     '-crf', '18',
+    ...fpsArgs,
     '-c:a', 'copy',
     '-y',
     outputPath
