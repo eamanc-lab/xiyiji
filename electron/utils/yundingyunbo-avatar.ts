@@ -8,9 +8,12 @@ import { cutVideoSegment, extractVideoInfo, type VideoInfo } from './ffmpeg'
 const AVATAR_REFERENCE_CLIP_POLICY_VERSION = 'v5'
 const CAMERA_REFERENCE_MAX_DURATION_SEC = 12
 const AVATAR_REFERENCE_MAX_DURATION_SEC = (() => {
-  const raw = Number(process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC || '36000')
-  if (!Number.isFinite(raw)) return 36000
-  return raw > 0 ? raw : 36000
+  // Default: 5 minutes. Longer videos (e.g. 27min) would take 70+ minutes
+  // for character preprocessing (face detection + XSeg mask generation).
+  // 5 minutes is usually enough to capture face angles for the model.
+  const raw = Number(process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC || '300')
+  if (!Number.isFinite(raw)) return 300
+  return raw > 0 ? raw : 300
 })()
 const AVATAR_REFERENCE_MIN_DURATION_SEC = (() => {
   const raw = Number(process.env.YDB_AVATAR_REFERENCE_MIN_DURATION_SEC || '30')

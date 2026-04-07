@@ -1,8 +1,13 @@
-// Allow full-length reference clips for video-stream direct_playback mode.
+// Limit avatar reference clip to first 5 minutes for performance.
+// Long videos (e.g. 27min) used to take 70+ minutes to preprocess.
+// Reference clip is only used for character model training (face detection
+// + XSeg mask generation). The full-length driving video is still played
+// in video-stream mode, so playback content/duration is not affected.
+// Set higher (e.g. 1800) if face angles are not fully captured in first 5 min.
 // Must be set before any module imports yundingyunbo-avatar.ts (which reads
 // these env vars once at module-load time to compute clip duration constants).
 if (!process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC) {
-  process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC = '36000'
+  process.env.YDB_AVATAR_REFERENCE_MAX_DURATION_SEC = '300'
 }
 if (!process.env.YDB_AVATAR_REFERENCE_TARGET_FRAMES) {
   process.env.YDB_AVATAR_REFERENCE_TARGET_FRAMES = '0'
