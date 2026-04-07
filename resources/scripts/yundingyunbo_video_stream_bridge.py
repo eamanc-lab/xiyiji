@@ -158,30 +158,52 @@ class VideoStreamBridge(_CompiledVideoStreamBridge):
         reference_frame_source_path: str = '',
         reference_frame_source_info: dict | None = None,
     ) -> tuple[str, dict, dict]:
-        # Always passthrough to parent — never force direct_playback.
-        #
-        # Previously this method forced `direct_playback=True` when reference
-        # was much shorter than driving (e.g. 5min reference + 27min driving).
-        # That set `_video_stream_direct_drive_enabled=True` which disabled
-        # special_drive mode, causing playback to be limited by the
-        # normalized_video range (driven by reference length). The visible
-        # symptom: video looped every 5 minutes instead of playing the full
-        # 27 minutes.
-        #
-        # By passthrough, special_drive mode stays enabled and behaves like
-        # camera mode: each audio task triggers an on-demand segment capture
-        # from the full driving video via _prepare_file_mode_driving_segment +
-        # manager.drive_with_special_video. This processes the driving video
-        # frame-by-frame at request time, independent of reference length.
-        # Result: reference can stay short (fast preheat) while driving plays
-        # in full and loops naturally back to the start.
-        return super()._resolve_file_mode_runtime_driving(
+        # Passthrough to parent — never force direct_playback. This keeps
+        # special_drive mode enabled (per-segment processing of the full
+        # driving video, similar to camera mode).
+        resolved_path, resolved_info, meta = super()._resolve_file_mode_runtime_driving(
             backend,
             driving_video_path,
             driving_video_info,
             reference_frame_source_path,
             reference_frame_source_info,
         )
+
+        if backend != 'video_stream':
+            return resolved_path, resolved_info, meta
+
+        # Override the driving video's logical fps with the reference fps.
+        # frame_synthesizer.synthesize_batch in yundingyunbo expects segments
+        # at the reference (normalized_video) fps — typically 25. If we leave
+        # the driving fps as-is (e.g. 35 fps from the source video), each
+        # generated segment has too many frames per audio second, the batch
+        # boundaries don't align, and the synthesizer raises:
+        #     ValueError: 输入批次大小(5)与要求的批次大小(4)不匹配
+        #
+        # The override only changes the logical fps used by the request
+        # bookkeeping (cursor advancement, segment encoding via fps filter).
+        # The physical driving video file is untouched. ffmpeg -ss seeks by
+        # seconds (not frames), so segment seek positions stay correct.
+        reference_info = dict(reference_frame_source_info or {})
+        reference_fps = float(reference_info.get('fps') or 0.0)
+        if reference_fps > 0:
+            current_fps = float(resolved_info.get('fps') or 0.0)
+            if abs(current_fps - reference_fps) > 0.5:
+                duration = float(resolved_info.get('duration') or 0.0)
+                new_info = dict(resolved_info)
+                new_info['fps'] = reference_fps
+                if duration > 0:
+                    new_info['n_frames'] = max(1, int(round(duration * reference_fps)))
+                base.log(
+                    'Video-stream effective driving fps overridden for '
+                    f'frame_synthesizer alignment: driving fps {current_fps:.3f} -> '
+                    f'reference fps {reference_fps:.3f}, '
+                    f'logical n_frames={new_info.get("n_frames")} '
+                    f'(duration={duration:.3f}s)'
+                )
+                return resolved_path, new_info, meta
+
+        return resolved_path, resolved_info, meta
 
     def _reserve_file_mode_drive_request(
         self,
