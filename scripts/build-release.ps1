@@ -12,7 +12,12 @@ foreach ($arg in $args) {
       $FullForce = $true
     }
     '--customer-sample' {
-      $Full = $true
+      # IMPORTANT: customer-sample 不再隐含 $Full = $true。
+      # customer-sample 只裁剪 db + 应用文件 + 形象素材，不需要重新复制
+      # yundingyunbo_v163（30+ GB），那会触发 PowerShell Copy-Item + Move-Item
+      # 流程，遇到 Windows 文件系统延迟锁会失败。
+      # 如果 release 还没有 yundingyunbo_v163，下方 $needYundingCopy 检查
+      # 会自动触发首次复制（fallback 安全）。
       $CustomerSample = $true
     }
   }
@@ -53,7 +58,7 @@ Write-Host ''
 Write-Host '========================================================'
 Write-Host '  YunYing Digital Human Build & Package'
 $modeLabel = if ($CustomerSample) {
-  'CUSTOMER SAMPLE (Full + szr.mp4 + ttt only)'
+  'CUSTOMER SAMPLE (szr.mp4 + ttt only, reuse existing yundingyunbo_v163 if present)'
 } elseif ($Full) {
   'FULL (App + yundingyunbo v191)'
 } else {
@@ -177,7 +182,25 @@ if ($needYundingCopy) {
     }
 
     Remove-IfExists $yundingDst
-    Move-Item -LiteralPath $yundingStage -Destination $yundingDst
+    # Windows 文件系统在 Copy-Item 复制完成后有一段时间会保留 handle / index 锁
+    # （Search Indexer / Antimalware Service / 文件 metadata 同步等），导致
+    # Move-Item 报"对路径访问被拒绝"。重试 5 次 + 每次 backoff 3 秒。
+    $moveAttempts = 0
+    $maxMoveAttempts = 5
+    while ($true) {
+      $moveAttempts += 1
+      try {
+        Move-Item -LiteralPath $yundingStage -Destination $yundingDst -ErrorAction Stop
+        break
+      } catch {
+        if ($moveAttempts -ge $maxMoveAttempts) {
+          Write-Host ('yundingyunbo Move-Item failed after {0} attempts: {1}' -f $moveAttempts, $_.Exception.Message)
+          throw
+        }
+        Write-Host ('yundingyunbo Move-Item attempt {0}/{1} failed: {2}. Retrying in 3s...' -f $moveAttempts, $maxMoveAttempts, $_.Exception.Message)
+        Start-Sleep -Seconds 3
+      }
+    }
     Write-Host 'yundingyunbo copied.'
   } catch {
     Remove-IfExists $yundingStage

@@ -240,6 +240,7 @@ npm run release:customer
 - 开发机的 `appdata/xiyiji/data/xiyiji.db` 必须已经存在 `dh_profiles.name='ttt'`，否则脚本会 fail
 - 这两条数据可以预先在开发机的应用 UI 里手动建好，名字必须**完全**一致
 - 不需要 ttt 当前绑定 szr.mp4，脚本会强制重绑
+- **`release/xiyiji-release/yundingyunbo_v163` 应该已存在**（先跑一次 `npm run release:full` 初始化）。`release:customer` 不再隐含 `--full`，避免每次都重新复制 30+ GB 的引擎；如果 release 还没有 yundingyunbo_v163，会自动 fallback 到首次完整复制
 
 适用场景：
 
