@@ -185,19 +185,19 @@ if ($needYundingCopy) {
     # Windows 文件系统在 Copy-Item 复制完成后有一段时间会保留 handle / index 锁
     # （Search Indexer / Antimalware Service / 文件 metadata 同步等），导致
     # Move-Item 报"对路径访问被拒绝"。重试 5 次 + 每次 backoff 3 秒。
-    $moveAttempts = 0
+    # 用显式 for 循环 + 局部作用域保险，避开 strict mode 对 += 的边界问题。
     $maxMoveAttempts = 5
-    while ($true) {
-      $moveAttempts += 1
+    for ($attempt = 1; $attempt -le $maxMoveAttempts; $attempt++) {
       try {
         Move-Item -LiteralPath $yundingStage -Destination $yundingDst -ErrorAction Stop
         break
       } catch {
-        if ($moveAttempts -ge $maxMoveAttempts) {
-          Write-Host ('yundingyunbo Move-Item failed after {0} attempts: {1}' -f $moveAttempts, $_.Exception.Message)
+        $errMsg = $_.Exception.Message
+        if ($attempt -ge $maxMoveAttempts) {
+          Write-Host ('yundingyunbo Move-Item failed after {0} attempts: {1}' -f $attempt, $errMsg)
           throw
         }
-        Write-Host ('yundingyunbo Move-Item attempt {0}/{1} failed: {2}. Retrying in 3s...' -f $moveAttempts, $maxMoveAttempts, $_.Exception.Message)
+        Write-Host ('yundingyunbo Move-Item attempt {0}/{1} failed: {2}. Retrying in 3s...' -f $attempt, $maxMoveAttempts, $errMsg)
         Start-Sleep -Seconds 3
       }
     }
