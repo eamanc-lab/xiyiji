@@ -68,11 +68,11 @@
   </head>
   <body>
     <div id="videoContainer" style="position: relative; width: 100%; height: 100%;">
-      <video id="videoPlayerA" muted style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2;"></video>
-      <video id="videoPlayerB" muted style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; display: none;"></video>
-      <video id="cameraVideo" autoplay muted playsinline style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; display: none;"></video>
-      <canvas id="frameStreamCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; display: none;"></canvas>
-      <canvas id="chromaCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 3; display: none;"></canvas>
+      <video id="videoPlayerA" muted style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 2;"></video>
+      <video id="videoPlayerB" muted style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 1; display: none;"></video>
+      <video id="cameraVideo" autoplay muted playsinline style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 0; display: none;"></video>
+      <canvas id="frameStreamCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 2; display: none;"></canvas>
+      <canvas id="chromaCanvas" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 3; display: none;"></canvas>
     </div>
     <button class="close-btn" id="closeBtn">&times;</button>
     <div class="status-text" id="statusText"></div>
