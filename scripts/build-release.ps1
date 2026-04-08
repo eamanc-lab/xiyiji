@@ -12,12 +12,11 @@ foreach ($arg in $args) {
       $FullForce = $true
     }
     '--customer-sample' {
-      # IMPORTANT: customer-sample 不再隐含 $Full = $true。
-      # customer-sample 只裁剪 db + 应用文件 + 形象素材，不需要重新复制
-      # yundingyunbo_v163（30+ GB），那会触发 PowerShell Copy-Item + Move-Item
-      # 流程，遇到 Windows 文件系统延迟锁会失败。
-      # 如果 release 还没有 yundingyunbo_v163，下方 $needYundingCopy 检查
-      # 会自动触发首次复制（fallback 安全）。
+      # customer-sample no longer implies $Full = $true. It only prunes the
+      # db, app files, and avatar assets; reusing existing yundingyunbo_v163
+      # avoids the slow PowerShell Copy-Item + Move-Item flow. If release
+      # has no yundingyunbo_v163 yet, $needYundingCopy below will fall back
+      # to a one-time full copy automatically.
       $CustomerSample = $true
     }
   }
@@ -55,10 +54,12 @@ function Get-YundingVersion {
 }
 
 function Move-ItemWithRetry {
-  # Windows 文件系统在 Copy-Item 完成后会保留 handle / index 锁
-  # （Search Indexer / Antimalware Service / metadata 同步等），导致
-  # Move-Item 报"对路径访问被拒绝"。这个函数加 retry + backoff 兜底。
-  # 函数有自己的作用域，参数是局部变量，避开 strict mode 的边界问题。
+  # Move-Item with retry. Windows can hold handle/index locks on freshly
+  # copied files (Search Indexer / Antimalware / metadata sync), causing
+  # "access denied" intermittently. Local function scope avoids strict
+  # mode pitfalls; CHT/CHS comments removed because PowerShell on Windows
+  # defaults to ANSI/GBK and UTF-8 multi-byte sequences in inline comments
+  # can corrupt the parser line counter.
   param(
     [Parameter(Mandatory = $true)] [string]$Source,
     [Parameter(Mandatory = $true)] [string]$Destination,
