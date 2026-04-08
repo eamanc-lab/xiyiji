@@ -360,6 +360,190 @@ function prewarmYdbCharacters({
   }
 }
 
+// =============================================================================
+// Customer sample data preparation
+// =============================================================================
+//
+// When called with --customer-sample, the seeding step prunes the source
+// database down to a single demo configuration so the shipped customer
+// package starts in a clean, ready-to-use state. The user picked
+// szr.mp4 + ttt as the demo case, and asked for an explicit "演示房间"
+// pre-bound to ttt so customers can preview immediately.
+//
+// Cleanup rules (decided with user, do not change without confirmation):
+//   Q1=d  rooms 表清空，再插入 1 个 "演示房间" 绑定 ttt
+//   Q2=b  保留 api_keys / accounts / platform_credentials（不动）
+//   Q3=c  通过独立 npm script release:customer 触发，默认不开启
+//
+// IMPORTANT: this only mutates the in-memory db copy + release directory
+// files. The source AppData db on the developer machine is never written.
+
+const SAMPLE_AVATAR_NAME = 'szr.mp4'
+const SAMPLE_PROFILE_NAME = 'ttt'
+const SAMPLE_DEMO_ROOM_NAME = '演示房间'
+const SAMPLE_DEMO_ROOM_PLATFORM = 'douyin'
+
+function generateUuidV4() {
+  // Lightweight uuid v4 (no external dependency); good enough for db rows.
+  const bytes = crypto.randomBytes(16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
+    `${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+  )
+}
+
+function findSingleAvatarIdByName(db, name) {
+  const rows = queryObjects(db, 'SELECT id FROM avatar_videos WHERE name = ? LIMIT 1', [
+    name
+  ])
+  return rows[0] ? String(rows[0].id) : ''
+}
+
+function findSingleProfileIdByName(db, name) {
+  const rows = queryObjects(db, 'SELECT id FROM dh_profiles WHERE name = ? LIMIT 1', [
+    name
+  ])
+  return rows[0] ? String(rows[0].id) : ''
+}
+
+function applyCustomerSampleData(db) {
+  log('Applying customer sample data: keep szr.mp4 + ttt only')
+
+  // 1. Locate the sample avatar/profile rows. Both must exist in source db.
+  const sampleAvatarId = findSingleAvatarIdByName(db, SAMPLE_AVATAR_NAME)
+  if (!sampleAvatarId) {
+    fail(
+      `Customer sample requires avatar_videos.name='${SAMPLE_AVATAR_NAME}', ` +
+        `but it was not found in the source database. Add it via the app first.`
+    )
+  }
+  log(`  sample avatar id: ${sampleAvatarId}`)
+
+  const sampleProfileId = findSingleProfileIdByName(db, SAMPLE_PROFILE_NAME)
+  if (!sampleProfileId) {
+    fail(
+      `Customer sample requires dh_profiles.name='${SAMPLE_PROFILE_NAME}', ` +
+        `but it was not found in the source database. Add it via the app first.`
+    )
+  }
+  log(`  sample profile id: ${sampleProfileId}`)
+
+  // 2. Force ttt to bind szr.mp4, set as default. The current ttt may point
+  //    to a different video — we always rewrite to keep the package consistent.
+  db.run(
+    `UPDATE dh_profiles
+     SET video_id = ?, is_default = 1, updated_at = datetime('now','localtime')
+     WHERE id = ?`,
+    [sampleAvatarId, sampleProfileId]
+  )
+  // Ensure no other row claims is_default=1
+  db.run(
+    'UPDATE dh_profiles SET is_default = 0 WHERE id <> ?',
+    [sampleProfileId]
+  )
+
+  // 3. Whitelist deletion: remove every other avatar / profile.
+  db.run('DELETE FROM avatar_videos WHERE id <> ?', [sampleAvatarId])
+  db.run('DELETE FROM dh_profiles WHERE id <> ?', [sampleProfileId])
+
+  // 4. Clear all script-management tables (Tab3 contents).
+  //    These tables CASCADE-delete on rooms anyway, but we clear them
+  //    explicitly so behavior is independent of PRAGMA foreign_keys state.
+  db.run('DELETE FROM scripts')
+  db.run('DELETE FROM forbidden_words')
+  db.run('DELETE FROM blacklist')
+  db.run('DELETE FROM room_links')
+  db.run('DELETE FROM room_settings')
+
+  // 5. Clear all rooms (Q1=d), then insert a single "演示房间" bound to ttt.
+  db.run('DELETE FROM rooms')
+  const demoRoomId = generateUuidV4()
+  db.run(
+    `INSERT INTO rooms (id, name, platform, status, profile_id, created_at)
+     VALUES (?, ?, ?, 'idle', ?, datetime('now','localtime'))`,
+    [demoRoomId, SAMPLE_DEMO_ROOM_NAME, SAMPLE_DEMO_ROOM_PLATFORM, sampleProfileId]
+  )
+  log(`  demo room created: id=${demoRoomId} name=${SAMPLE_DEMO_ROOM_NAME}`)
+
+  // 6. NOTE: per Q2=b, api_keys / accounts / platform_credentials are NOT
+  //    touched. The customer will see whatever the developer machine has.
+  //    This is a deliberate choice — change only with explicit approval.
+  log('  api_keys / accounts / platform_credentials: untouched (per Q2=b)')
+
+  log('Customer sample data prepared')
+}
+
+function isSampleAvatarManagedFile(name, sampleStem) {
+  // Managed files are saved as `<stem>_<10char hex>.<ext>`. Match exactly
+  // the same prefix to avoid accidentally deleting unrelated files that
+  // happen to share a prefix.
+  if (!name || !sampleStem) return false
+  const lower = name.toLowerCase()
+  const prefix = `${sampleStem.toLowerCase()}_`
+  if (!lower.startsWith(prefix)) return false
+  // After the prefix we expect 10 hex chars + extension.
+  const after = lower.slice(prefix.length)
+  return /^[0-9a-f]{10}\./.test(after)
+}
+
+function cleanReleaseSampleAssets(releaseDir) {
+  log('Cleaning release directory of non-sample avatar files')
+
+  const sampleStem = sanitizeStem(SAMPLE_AVATAR_NAME)
+  const cleanupTargets = [
+    {
+      label: 'data/avatar_videos',
+      dir: path.join(releaseDir, 'data', 'avatar_videos'),
+      keep: (name) => isSampleAvatarManagedFile(name, sampleStem)
+    },
+    {
+      label: 'data/avatar_thumbnails',
+      dir: path.join(releaseDir, 'data', 'avatar_thumbnails'),
+      keep: (name) => isSampleAvatarManagedFile(name, sampleStem)
+    },
+    {
+      label: 'heygem_data/yundingyunbo_avatar_refs',
+      dir: path.join(releaseDir, 'heygem_data', 'yundingyunbo_avatar_refs'),
+      // Reference clip names are <stem>_<hash>.mp4 — same prefix rule.
+      keep: (name) => isSampleAvatarManagedFile(name, sampleStem)
+    },
+    {
+      label: 'heygem_data/yundingyunbo_characters',
+      dir: path.join(releaseDir, 'heygem_data', 'yundingyunbo_characters'),
+      // Character cache directories are uuid-named and not name-correlated
+      // to the source avatar. Wipe them all here; prewarm will regenerate
+      // the cache for szr.mp4 only (because db has only that row left).
+      keep: () => false
+    }
+  ]
+
+  for (const target of cleanupTargets) {
+    if (!fs.existsSync(target.dir)) continue
+    let removed = 0
+    for (const entry of fs.readdirSync(target.dir, { withFileTypes: true })) {
+      const name = entry.name
+      // Always preserve the cache index file used by yundingyunbo runtime.
+      if (entry.isFile() && name === '_cache.json') continue
+      if (target.keep(name)) continue
+      const full = path.join(target.dir, name)
+      try {
+        fs.rmSync(full, { recursive: true, force: true })
+        removed += 1
+      } catch (err) {
+        log(`  warning: failed to remove ${full}: ${err.message || err}`)
+      }
+    }
+    if (removed > 0) {
+      log(`  ${target.label}: removed ${removed} entry/entries`)
+    }
+  }
+
+  log('Release sample asset cleanup complete')
+}
+
 async function main() {
   const args = parseArgs(process.argv)
   const projectDir = path.resolve(args['project-dir'] || path.join(__dirname, '..'))
@@ -380,6 +564,13 @@ async function main() {
 
   const SQL = await initSqlJs()
   const db = new SQL.Database(fs.readFileSync(sourceDbPath))
+
+  const customerSampleMode = String(args['customer-sample'] || '0') === '1'
+  if (customerSampleMode) {
+    // Apply BEFORE the avatar copy loop runs, so the loop only sees the
+    // single sample row and copies just one file.
+    applyCustomerSampleData(db)
+  }
 
   const dataDir = path.join(releaseDir, 'data')
   const managedVideoDir = path.join(dataDir, 'avatar_videos')
@@ -453,6 +644,12 @@ async function main() {
   upsertSetting(db, 'dianjt_base', '')
   upsertSetting(db, 'yundingyunbo_base', '')
   upsertSetting(db, 'lipsync_backend', 'yundingyunbo')
+
+  if (customerSampleMode) {
+    // Sweep release directory after db has been pruned but before db is
+    // written. This way the file layout matches the row layout.
+    cleanReleaseSampleAssets(releaseDir)
+  }
 
   fs.writeFileSync(releaseDbPath, Buffer.from(db.export()))
   db.close()

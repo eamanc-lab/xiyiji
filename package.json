@@ -1,6 +1,6 @@
 {
   "name": "xiyiji",
-  "version": "28.0.0",
+  "version": "30.0.0",
   "description": "AI Digital Human Video Synthesis Platform",
   "main": "./out/main/index.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "build:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-win.ps1",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1",
     "release:full": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1 --full",
+    "release:customer": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-release.ps1 --full --customer-sample",
     "release:update": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/build-update-package.ps1",
     "postinstall": "electron-builder install-app-deps",
     "test:unit": "vitest run --config vitest.config.ts",

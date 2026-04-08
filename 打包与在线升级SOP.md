@@ -1,15 +1,17 @@
 ﻿# 打包与在线升级SOP
 
-最后更新：2026-03-29  
-当前有效版本：`V28`（内部包版本：`28.0.0`）
+最后更新：2026-04-08  
+当前有效版本：`V30`（内部包版本：`30.0.0`）
 
 当前补充说明：
 
-- 这次 `V28` 用于正式验证 `V27 -> V28` 在线升级闭环。
+- 这次 `V30` 用于当前正式在线升级发布，目标链路为 `V29 -> V30`。
+- `V30` 引入新的客户案例打包模式 `npm run release:customer`：完整包基础上，将 SQLite 数据库裁剪为只保留 `szr.mp4` 形象素材 + `ttt` 形象配置 + 一个绑定 ttt 的 `演示房间`，让客户拿到包后即开即用。
+- `V30` 修复了视频帧"回环"问题最后一轮验证：`reference == driving` 完整 27 分钟方案，配合 `correlationId/prepare-commit/cancelAll` 全链路日志，可追踪所有帧重置事件。
 - `V22 -> V27` 期间客户日志反复出现 `Updater helper exited too early` / `startup timed out`，根因集中在旧的 `cmd/start + PowerShell 文件脚本 + 多命令行参数` 交接链路。
 - 当前升级器已改为：主程序先写配置文件，再起一个 starter PowerShell，由它用 `Start-Process` 拉起真正的 helper PowerShell。
 - 这样可以避免把中文 exe 名、长路径、ready/result/health 等一串参数直接经过 `cmd/start` 传递。
-- 这版 `V28` 的定位是用于验证“客户已手动覆盖到 V27 后，能否稳定在线升级到 V28”。
+- 当前发版基线是：客户若已在 `V29`，应通过程序内在线升级到 `V30`。
 
 ## 1. 作用范围
 
@@ -101,7 +103,7 @@
 
 当前线上升级包命名规则：
 
-- `https://xiyijiupdate2.oss-cn-hangzhou.aliyuncs.com/xiyiji-app-update-28.0.0.zip`
+- `https://xiyijiupdate2.oss-cn-hangzhou.aliyuncs.com/xiyiji-app-update-30.0.0.zip`
 
 固定规则：
 
@@ -140,7 +142,9 @@
 - `25.0.0` 可以升级到 `26.0.0`
 - `26.0.0` 可以升级到 `27.0.0`
 - `27.0.0` 可以升级到 `28.0.0`
-- `27.0.0` 不会升级到 `27.0.0`
+- `28.0.0` 可以升级到 `29.0.0`
+- `29.0.0` 可以升级到 `30.0.0`
+- `30.0.0` 不会升级到 `30.0.0`
 
 结论：
 - 只要要测试“检查更新”和“下载升级包”，远端版本必须大于本地版本。
@@ -165,8 +169,8 @@
 
 固定规则：
 - 每次发布新版本，必须先递增 `package.json` 的 `version`
-- `package.json`、`manifest.json`、升级 zip 文件名使用内部包版本，例如 `28.0.0`
-- 左上角和升级面板统一显示对外版本，例如 `V28`
+- `package.json`、`manifest.json`、升级 zip 文件名使用内部包版本，例如 `29.0.0`
+- 左上角和升级面板统一显示对外版本，例如 `V29`
 - 如果左上角没有显示版本号，视为本次发布不合格，不能发客户，不能上传 OSS
 
 ## 7. 标准命令
@@ -211,6 +215,38 @@ npm run release:full
 - 首次交付客户
 - 需要发完整包到百度网盘
 - 要确认完整运行时一起打入交付目录
+
+### 7.4.1 生成"客户案例"完整包（推荐发新客户用）
+
+```powershell
+npm run release:customer
+```
+
+这个命令在 `release:full` 的基础上，额外把 SQLite 数据库和素材目录裁剪为只保留 1 个示例：
+
+裁剪规则：
+
+- 只保留 `avatar_videos.name = 'szr.mp4'` 这一条形象素材
+- 只保留 `dh_profiles.name = 'ttt'` 这一条形象配置，并强制把它的 `video_id` 重写为 `szr.mp4` 的 id，`is_default` 设为 1
+- 清空 `scripts` / `forbidden_words` / `blacklist` / `room_links` / `room_settings`
+- 清空 `rooms`，新建 1 个示例房间「演示房间」绑定到 `ttt`
+- `release/data/avatar_videos`、`release/data/avatar_thumbnails`、`release/heygem_data/yundingyunbo_avatar_refs` 中只保留 `szr_*.mp4` 文件，其他全部删除
+- `release/heygem_data/yundingyunbo_characters` 全部清空（prewarm 阶段会重新为 szr.mp4 生成 cache）
+- 不动 `accounts` / `api_keys` / `platform_credentials`（三表保留开发机数据原样）
+
+前置硬性要求：
+
+- 开发机的 `appdata/xiyiji/data/xiyiji.db` 必须已经存在 `avatar_videos.name='szr.mp4'`，否则脚本会 fail
+- 开发机的 `appdata/xiyiji/data/xiyiji.db` 必须已经存在 `dh_profiles.name='ttt'`，否则脚本会 fail
+- 这两条数据可以预先在开发机的应用 UI 里手动建好，名字必须**完全**一致
+- 不需要 ttt 当前绑定 szr.mp4，脚本会强制重绑
+
+适用场景：
+
+- 给新客户首次交付，希望客户拿到包就能直接看到一个完整可用的形象案例
+- 不想让客户看到开发遗留的多个素材/方案/房间
+
+⚠️ 注意：因为不动 `accounts` / `api_keys` / `platform_credentials`，开发机绑定的 API Key 会随包给到客户。如果不希望客户使用你的 Key，请在打包前手动在 Tab6 设置页清空所有云端 API Key。
 
 ### 7.5 只上传当前已生成的在线升级包到 OSS
 
@@ -300,6 +336,44 @@ npm run release:full
 2. 用完整包自测
 3. 确认没问题后，再跑 `publish-oss.ps1 -SkipBuild`
 4. 最后再发给客户
+
+### 8.4 客户案例完整包发布流程
+
+适用于：要给新客户发带"示例数据"的完整包，客户拿到后就能直接看到 szr.mp4 + ttt + 演示房间。
+
+前置条件（**必须先确认**）：
+
+1. 打开开发机上的应用，确认 Tab1 里有形象素材 `szr.mp4`
+2. 确认 Tab2 里有形象配置 `ttt`（绑定哪个素材都可以，打包脚本会强制重绑到 szr.mp4）
+3. 确认 Tab6 设置页的云端 API Key（DashScope / UCloud TTS）已经清空，否则这些 Key 会随包发给客户
+4. 在正式目录 `D:\yunyin\XYJ2\xiyiji` 执行，不要在旧目录
+
+执行步骤：
+
+1. 修改 `package.json` 到目标正式版本
+2. 执行：
+
+```powershell
+npm run test:unit
+npm run build
+npm run release:customer
+```
+
+3. 确认输出中包含 `Customer sample mode: keep szr.mp4 + ttt only, others pruned.`
+4. 确认完整包目录：
+
+`D:\yunyin\XYJ2\xiyiji\release\xiyiji-release`
+
+5. 打开 `release\xiyiji-release\云映数字人.exe` 自测：
+   - 大厅页只有 1 个「演示房间」
+   - 进入演示房间 → Tab1 只有 1 个 szr.mp4
+   - Tab2 只有 1 个 ttt 方案，is_default，已绑定 szr.mp4
+   - Tab3 的脚本/禁词/黑名单全部为空
+   - 点击预览，画面正常
+
+6. 压缩整个 `xiyiji-release` 上传百度网盘
+
+注意：`release:customer` 始终走完整包（自动隐含 `--full`）。如果只想发在线升级包给老客户，继续用 `npm run release`，不要用这个命令（`release:customer` 会重置你本地 release 目录的大量数据）。
 
 ## 9. 在线升级技术规则
 
@@ -551,13 +625,14 @@ npm run release:full
 
 ## 17. 当前有效结果
 
-截至 2026-03-29，当前已确认：
+截至 2026-04-08，当前已确认：
 
-- 当前版本：`V28`（内部包版本：`28.0.0`）
+- 当前版本：`V30`（内部包版本：`30.0.0`）
 - 本地完整包目录：`D:\yunyin\XYJ2\xiyiji\release\xiyiji-release`
 - 本地在线升级目录：`D:\yunyin\XYJ2\xiyiji\release\online-update`
 - 线上 manifest：`https://xiyijiupdate2.oss-cn-hangzhou.aliyuncs.com/manifest.json`
-- 线上 zip：`https://xiyijiupdate2.oss-cn-hangzhou.aliyuncs.com/xiyiji-app-update-28.0.0.zip`
+- 线上 zip：`https://xiyijiupdate2.oss-cn-hangzhou.aliyuncs.com/xiyiji-app-update-30.0.0.zip`
+- 客户案例打包命令：`npm run release:customer`（详见 7.4.1 / 8.4）
 
 ## 18. 本文档关联入口
 

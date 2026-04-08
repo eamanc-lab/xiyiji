@@ -1,6 +1,7 @@
 param(
   [switch]$Full,
-  [switch]$FullForce
+  [switch]$FullForce,
+  [switch]$CustomerSample
 )
 
 foreach ($arg in $args) {
@@ -9,6 +10,10 @@ foreach ($arg in $args) {
     '--full-force' {
       $Full = $true
       $FullForce = $true
+    }
+    '--customer-sample' {
+      $Full = $true
+      $CustomerSample = $true
     }
   }
 }
@@ -47,7 +52,14 @@ function Get-YundingVersion {
 Write-Host ''
 Write-Host '========================================================'
 Write-Host '  YunYing Digital Human Build & Package'
-Write-Host ('  Mode: {0}' -f ($(if ($Full) { 'FULL (App + yundingyunbo v191)' } else { 'APP ONLY (update)' })))
+$modeLabel = if ($CustomerSample) {
+  'CUSTOMER SAMPLE (Full + szr.mp4 + ttt only)'
+} elseif ($Full) {
+  'FULL (App + yundingyunbo v191)'
+} else {
+  'APP ONLY (update)'
+}
+Write-Host ('  Mode: {0}' -f $modeLabel)
 Write-Host '========================================================'
 
 Write-Step '0/6' 'Cleaning build caches'
@@ -227,12 +239,17 @@ if (Test-Path $yundingDst) {
 }
 
 Write-Host 'Seeding portable database, managed assets, and YDB caches.'
-Invoke-CheckedCommand -FilePath $nodeExe -Arguments @(
+$seedArgs = @(
   (Join-Path $projectDir 'scripts\seed-portable-release.cjs'),
   '--project-dir', $projectDir,
   '--release-dir', $fullReleaseDir,
   '--skip-prewarm', '1'
-) -WorkingDirectory $projectDir
+)
+if ($CustomerSample) {
+  Write-Host 'Customer sample mode: keep szr.mp4 + ttt only, others pruned.'
+  $seedArgs += @('--customer-sample', '1')
+}
+Invoke-CheckedCommand -FilePath $nodeExe -Arguments $seedArgs -WorkingDirectory $projectDir
 Invoke-CheckedCommand -FilePath 'powershell.exe' -Arguments @(
   '-NoProfile',
   '-ExecutionPolicy', 'Bypass',
