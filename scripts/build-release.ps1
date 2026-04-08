@@ -54,6 +54,36 @@ function Get-YundingVersion {
   return $match.Matches[0].Groups[1].Value.Trim()
 }
 
+function Move-ItemWithRetry {
+  # Windows 文件系统在 Copy-Item 完成后会保留 handle / index 锁
+  # （Search Indexer / Antimalware Service / metadata 同步等），导致
+  # Move-Item 报"对路径访问被拒绝"。这个函数加 retry + backoff 兜底。
+  # 函数有自己的作用域，参数是局部变量，避开 strict mode 的边界问题。
+  param(
+    [Parameter(Mandatory = $true)] [string]$Source,
+    [Parameter(Mandatory = $true)] [string]$Destination,
+    [int]$MaxAttempts = 5,
+    [int]$DelaySeconds = 3
+  )
+
+  $attempt = 1
+  while ($attempt -le $MaxAttempts) {
+    try {
+      Move-Item -LiteralPath $Source -Destination $Destination -ErrorAction Stop
+      return
+    } catch {
+      $errMsg = $_.Exception.Message
+      if ($attempt -ge $MaxAttempts) {
+        Write-Host ("Move-ItemWithRetry failed after {0} attempts: {1}" -f $attempt, $errMsg)
+        throw
+      }
+      Write-Host ("Move-ItemWithRetry attempt {0}/{1} failed: {2}. Retrying in {3}s..." -f $attempt, $MaxAttempts, $errMsg, $DelaySeconds)
+      Start-Sleep -Seconds $DelaySeconds
+      $attempt = $attempt + 1
+    }
+  }
+}
+
 Write-Host ''
 Write-Host '========================================================'
 Write-Host '  YunYing Digital Human Build & Package'
@@ -182,25 +212,7 @@ if ($needYundingCopy) {
     }
 
     Remove-IfExists $yundingDst
-    # Windows 文件系统在 Copy-Item 复制完成后有一段时间会保留 handle / index 锁
-    # （Search Indexer / Antimalware Service / 文件 metadata 同步等），导致
-    # Move-Item 报"对路径访问被拒绝"。重试 5 次 + 每次 backoff 3 秒。
-    # 用显式 for 循环 + 局部作用域保险，避开 strict mode 对 += 的边界问题。
-    $maxMoveAttempts = 5
-    for ($attempt = 1; $attempt -le $maxMoveAttempts; $attempt++) {
-      try {
-        Move-Item -LiteralPath $yundingStage -Destination $yundingDst -ErrorAction Stop
-        break
-      } catch {
-        $errMsg = $_.Exception.Message
-        if ($attempt -ge $maxMoveAttempts) {
-          Write-Host ('yundingyunbo Move-Item failed after {0} attempts: {1}' -f $attempt, $errMsg)
-          throw
-        }
-        Write-Host ('yundingyunbo Move-Item attempt {0}/{1} failed: {2}. Retrying in 3s...' -f $attempt, $maxMoveAttempts, $errMsg)
-        Start-Sleep -Seconds 3
-      }
-    }
+    Move-ItemWithRetry -Source $yundingStage -Destination $yundingDst -MaxAttempts 5 -DelaySeconds 3
     Write-Host 'yundingyunbo copied.'
   } catch {
     Remove-IfExists $yundingStage
