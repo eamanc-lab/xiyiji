@@ -28,6 +28,21 @@
    - 目的：为每步操作创建可回退的存档点，出问题时能精确定位和回滚
    - 最终交付前，可由用户决定是否用 git rebase -i 合并为一个整洁提交
    - 不要等所有改动完成后才一次性提交
+9. **三种媒体模式严格隔离铁律（非常重要，严禁违反）**：
+   - 项目里有三种媒体模式：`video`（视频模式）/ `video_stream`（视频流模式）/ `camera`（摄像头模式）
+   - 这三种模式走完全不同的代码路径和 Python bridge，任何一个模式的代码改动**只能影响它自己**
+   - 修改 `video` 模式的代码时：**不准动任何 `camera` 模式的代码**，也不准动 `video_stream` 模式的代码
+   - 修改 `video_stream` 模式的代码时：**不准动任何 `camera` 模式的代码**，也不准动 `video` 模式的代码
+   - 修改 `camera` 模式的代码时：**不准动任何 `video` / `video_stream` 模式的代码**
+   - 判断某段代码属于哪个模式的方式：
+     * 看 `mediaType` / `media_type` / `cameraMode` / `input_mode` 变量分支
+     * 看 `backend` 字段（`yundingyunbo` / `yundingyunbo_video_stream`）
+     * 看调用入口（`playerOpen` / `playerOpenVideoStream` / `playerOpenCamera`）
+     * 看 Python bridge 脚本（`yundingyunbo_bridge.py` 包含摄像头和视频共用逻辑，`yundingyunbo_video_stream_bridge.py` 专属 video_stream）
+   - 当代码路径有共享逻辑时（例如 `yundingyunbo.service.ts` 里的 initAvatar 同时服务三个模式），必须在分支处加条件判断，**绝不把一个模式的改动影响到另外两个模式**
+   - 出现需要"顺手改一下另一个模式"的情况时，**必须停下来先确认，改完后必须单独验证被牵连的模式**
+   - 本条是 V30 版本因为客户摄像头模式出现"一团黑雾"问题写入的硬规则，违反者需要回滚并重做
+   - 每次涉及修改播放 / 预热 / 帧同步 / bridge / player.ipc / yundingyunbo.service 等代码时，开头先自检"我这次改动会影响哪些模式？应该影响哪个？没意料到的模式是否被波及？"
 
 # 西忆集 (Xiyiji) — AI 数字人直播平台
 
